@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="en" xmlns:th="http://wwww.thymeleaf.org">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>webchat</title>
+    <link rel="icon" th:href="@{/favicon.ico}"/>
+    <script th:src="@{/js/jquery-3.4.1.js}" ></script>
+    <link rel="stylesheet" th:href="@{/css/common.css}" />
+    <link rel="stylesheet" th:href="@{/css/main.css}" />
+    <!-- layer.js 对话框API -->
+    <script th:src="@{/layer/layer.js}" ></script>
+    <script th:src="@{/js/crypto-js/crypto-js.js}"></script>
+    <script th:src="@{/js/crypto-js/tripledes.js}"></script>
+    <script th:src="@{/js/jsrsasign/lib/jsrsasign-all-min.js}"></script>
+    <script th:src="@{/js/jsencrypt/bin/jsencrypt.min.js}"></script>
+
+    <style>
+        .banner{
+            padding: 10px;
+            border-bottom: 1px solid #f1f1f1;
+            background: linear-gradient(to bottom, #d0e7f7 0%, #fbfcfd 50%);
+        }
+        .main{
+            position: relative;
+            padding: 4px 200px 10px 4px;
+            background-color: #fbfcfd;
+        }
+        /* 用户列表区 */
+        .main .userList{
+            position: absolute;
+            right:6px;
+            top:6px;
+            bottom: 6px;
+            width: 180px;
+            overflow-y: auto;
+            text-align: center;
+        }
+        .main .userList .item{
+            display: block;
+            margin: 4px;
+            text-align: center;
+            padding: 4px 8px;
+            border: 1px solid #ddd;
+            border-radius:1px;
+            font-size: 14px;
+            cursor: default;
+            background-color: #fff;
+            color: #4169E1;
+        }
+        /* 消息列表区 */
+        .mainList{
+            position: relative;
+            text-align: left;
+            overflow-y: scroll;
+            padding: 2px;
+            height: 400px;
+            background-color: #fff;
+        }
+        .mainList .item{
+            margin-top: 4px;
+            padding: 4px;
+            background-color: #fcfcfc;
+            font-size: 13px;
+            color: #222;
+            border-radius: 1px;
+        }
+        .mainList .item .time{
+            display: inline-block;
+            color: #888;
+            margin: 0 4px;
+        }
+        .mainList .item .user{
+            display: inline-block;
+            color: royalblue;
+            margin: 0 4px;
+        }
+        .mainList .item .message{
+            display: inline-block;
+            color: #222;
+            margin: 0 4px;
+        }
+        /* 消息中插入的图片 */
+        .mainList .item .chatImg{
+            max-width: 150px;
+            max-height: 70px;
+            cursor: zoom-in;
+        }
+
+        /* 编辑区 */
+        .editPane{
+            margin-top: 0px;
+            background-color: #fff;
+            padding: 4px;
+            border: 1px solid #ccc;
+        }
+        .editPane .content{
+            width:100%;
+            height: 80px;
+            box-sizing: border-box;
+            padding: 6px;
+            border-width: 0px;
+            border-radius:2px;
+            font-size: 14px;
+        }
+        .editPane .buttons *{
+            vertical-align: middle;
+        }
+        .editPane .buttons img{
+            margin-right: 15px;
+        }
+
+        .layui-layer-btn .layui-layer-btn1 {
+            border-color: #1E9FFF;
+            background-color: #1E9FFF;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+    <div class='container banner'>
+        聊 天 室
+        <div style='display:inline-block;float:right'>
+            <div th:if="${session.username == null}">
+                请先 <a href='javascript:void(0)' onclick='showLogin()'>登录</a>
+                才能发言
+            </div>
+            <div th:if="${session.username != null}">
+                <a href='javascript:void(0)'  onclick="logout()">注销&nbsp;&nbsp;</a>
+                ( 当前用户: <span style='color:royalblue' th:text='${session.username}'></span>)
+            </div>
+        </div>
+    </div>
+
+    <div class='container main' >
+        <div class='mainList'></div>
+        <div class='userList'></div>
+    </div>
+
+    <div class='container editPane' th:if="${session.username != null}" >
+        <div>
+            <textarea class='content'></textarea>
+        </div>
+        <div class='buttons' style='text-align:right'>
+            <!-- 图片发送 -->
+            <img th:src='@{/img/upload.png}' onclick="$('.editPane .upload').click()" title='发送图片'>
+            <input class='hidden upload' type='file' onchange='selectFileOK(this)'/>
+            <button onclick='send()' style='font-size:14px'>发送</button>
+        </div>
+    </div>
+
+    <!-- 用户登录对话框 -->
+    <div class='login_dlg_define' style='display:none'>
+        <div class='pane' style='padding:16px'>
+            <div style='padding:10px'>
+                <span style='display:inline-block;width:60px'>用户名:</span>
+                <input class='username' type='text' style='width:280px'>
+            </div>
+            <div style='padding:10px'>
+                <span style='display:inline-block;width:60px'>密码:</span>
+                <input class='password' type='password' style='width:280px'>
+            </div>
+        </div>
+    </div>
+
+    <!-- 显示图片的对话框定义 -->
+    <div class='showimg_dlg_define' style='display:none'>
+        <img class='zoom-in' style='cursor:zoom-out' onclick='layer.close(layer.index)'>
+    </div>
+
+</body>
+<script>
+    var sock = null;
+    var user = '[[${session.username}]]';
+    var privateKey = null;
+    var publicKey = null;
+    var webMsg = null;
+    var msg = null;
+
+    function initSocket() {
+        sock = new WebSocket('ws://localhost:8080/webchat/chat');
+
+        sock.onopen = function() {
+            console.log('Client Socket Open');
+        };
+        sock.onclose = function() {
+            console.log('Client Socket Closed');
+        };
+        sock.onerror = function() {
+            console.log('Client Socket Error');
+        };
+        sock.onmessage = function(event) {
+            console.log('Client Receive:' + event.data);
+            handleMessage(event.data);
+        };
+    }
+
+    // 消息处理
+    function handleMessage (data) {
+        // 转成json对象
+        var msg = JSON.parse(data);
+        if(msg.type == 'userList') {
+            showUserList(msg);
+        }
+        if(msg.type == 'enter') {
+            onUserEnter(msg);
+        }
+        if(msg.type == 'leave') {
+            onUserLeave(msg);
+        }
+        if(msg.type == 'sendAll') {
+            webMsg = msg.content;
+            msg.content = decryptRSA(msg.content);
+            console.log('前端解密后 : ' + msg.content);
+            console.log('后端拿到的签名 : ' + msg.signature);
+            console.log(verifySign(msg.signature));
+            if (verifySign(msg.signature)) {
+                showMessage(msg);
+            }
+        }
+    }
+
+    // data为群发消息
+    function showMessage(msg) {
+        var str = "<div class='item'>"
+            + "<span class='time'>##1</span>"
+            + "<span class='user'>##2</span>"
+            + "<span class='message'>##3</span>"
+            + "</div>";
+        str = str.replace(/##1/g, msg.time)
+            .replace(/##2/g, msg.from)
+            .replace(/##3/g, msg.content);
+
+        $('.mainList').append(str);
+    }
+
+    // 消息类型 'userList'
+    function showUserList (msg) {
+        var userList = msg.content;
+        for(var user of userList) {
+            var str = "<div class='item' rowid='##2' onclick='turnIntoBlue(this)'>##1</div>";
+            str = str.replace(/##1/g, user.name)
+                .replace(/##2/g, user.id);
+            $('.userList').append(str);
+        }
+    }
+    // 消息类型 'enter'
+    function onUserEnter (msg) {
+        var repeatedUser = null;
+        var user = msg.content;
+        var str = "<div class='item' rowid='##2' onclick='turnIntoBlue(this)'>##1</div>";
+        str = str.replace(/##1/g, user.name)
+            .replace(/##2/g, user.id);
+        $('.item').each(function () {
+            var txt = $(this).text();
+            if (txt == user.name) {
+                repeatedUser = this;
+            }
+        })
+        if (repeatedUser == null) {
+            $('.userList').append(str);
+        }
+    }
+    // 消息类型 'leave'
+    function onUserLeave (msg){
+        var user = msg.content;
+        var username = user.name;
+        $('.item').each(function () {
+            var txt = $(this).text();
+            if (txt == username) {
+                this.remove();
+            }
+        })
+    }
+
+    // 发送消息
+    function send() {
+        var userId = null;
+        $('.item').each(function () {
+            if ($(this).css("background-color") == 'rgb(30, 159, 255)') {
+                userId = $(this).attr("rowid");
+            }
+        })
+        var content = $('.editPane .content').val().trim();
+        // 上行消息
+        msg = {};
+        msg.type = 'sendAll';
+        msg.from = ''; // 发送者： 由后台补充填写
+        msg.to = userId; // 接收者
+        msg.content = content; // 内容
+
+        sock.send(JSON.stringify(msg));
+    }
+
+    // 显示登录对话框
+    function showLogin() {
+        var username = null;
+        var password = null;
+        layer.open({
+            type: 1,
+            title: '登录聊天室',
+            area: ['420px', 'auto'],
+            content: $('.login_dlg_define').html(),
+            btn:['注册', '登录'],
+            yes:function(index, layero) {
+                username = $('.username', layero).val().trim();
+                password = $('.password', layero).val().trim();
+                register(username, password);
+
+                // 关闭对话框
+                layer.close(index);
+            },
+            btn2:function(index, layero) {
+                username = $('.username', layero).val().trim();
+                password = $('.password', layero).val().trim();
+                login(username, password);
+
+                // 关闭对话框
+                layer.close(index);
+            }
+        });
+    };
+    function login(username, password) {
+        var msg = null;
+        password = encryptByDES(password, password)
+        $.ajax({
+            url:'/webchat/login',
+            data:'username=' + username + '&password=' + password,
+            type:'post',
+            async:false,
+            success:function (data) {
+                msg = data;
+                layerMsg(msg);
+            }
+        })
+    };
+
+    function register(username, password) {
+        var msg = null;
+        password = encryptByDES(password, password)
+        $.ajax({
+            url:"/webchat/register",
+            data:"username=" + username + "&password=" + password,
+            type:"post",
+            async:false,
+            success:function (data) {
+                msg = data;
+                layerMsg(msg);
+            }
+        })
+    };
+
+    function layerMsg(msg) {
+        if ('注册成功' == msg || '登录成功' == msg) {
+            layer.msg(msg, {
+                time: 1000,
+                end: function(){
+                    location.reload();
+                },
+            });
+        } else {
+            layer.msg(msg, {
+                time: 1000,
+                end: function(){
+                    location.reload();
+                },
+            });
+        }
+    };
+
+    // 前端DES密码加密
+    function encryptByDES(value, key) {
+        if(value == '') return '';
+        var keyHex = CryptoJS.enc.Utf8.parse(key);
+        var encrypted = CryptoJS.DES.encrypt(value, keyHex, {
+            mode: CryptoJS.mode.ECB,
+            padding: CryptoJS.pad.Pkcs7
+        });
+        return encrypted.toString();
+    };
+
+    initSocket();
+    getPrivateKey();
+    getPublicKey();
+
+    // 文件上传
+    function selectFileOK(button) {
+        var file = button.files[0];
+        var formData = new FormData();
+        formData.append("file", file);
+        $.ajax({
+            type:'post',
+            url:'/webchat/upload',
+            processData:false,
+            contentType:false,
+            dataType:"json",
+            data:formData,
+            success:function (urlType) {
+                var html = null;
+                if ('img' == urlType.type) {
+                    html = "<img class='chatImg' onclick='viewImage(this)' src='##1'>";
+                    html = html.replace(/##1/g, urlType.url);
+                } else {
+                    html = "<a href='##1' target='_blank'>##2</a>";
+                    html = html.replace(/##1/g, urlType.url)
+                        .replace(/##2/g, urlType.oldFileName);
+                }
+
+                // 发送消息
+                var userId = "";
+                $('.item').each(function () {
+                    if ($(this).css("background-color") == 'rgb(30, 159, 255)') {
+                        userId = $(this).attr("rowid");
+                    }
+                })
+                // 上行消息
+                var msg = {};
+                msg.type = 'sendAll';
+                msg.to = userId; // 接收者
+                msg.content = html; // 内容
+                sock.send(JSON.stringify(msg));
+            }
+        })
+    };
+    // 图片放大
+    function viewImage(dom) {
+        var src = $(dom).attr('src');
+        $('.zoom-in').attr('src', src);
+        layer.open({
+            type: 1,
+            title: false,
+            closeBtn: 0,
+            area: ['auto'],
+            skin: 'layui-layer-nobg', //没有背景色
+            shadeClose: true,
+            content: $('.showimg_dlg_define')
+        });
+    };
+
+    // 私聊用户列表变色
+    function turnIntoBlue(obj) {
+        var flag = false;
+        $('.item').each(function () {
+            if ($(this).css("background-color") == 'rgb(30, 159, 255)') {
+                $(this).removeAttr("style");
+                flag = true;
+            }
+        })
+        if (!flag) {
+            obj.style.backgroundColor = "#1E9FFF";
+        }
+    };
+
+    // 用户注销
+    function logout() {
+        $.ajax({
+            type: 'get',
+            url: '/webchat/logout',
+            async:false,
+            success:function (msg) {
+                console.log(msg);
+                location.reload();
+            }
+        })
+    };
+
+    // 拿到后台私钥
+    function getPrivateKey() {
+        var prefix = '-----BEGIN PRIVATE KEY-----\n';
+        var suffix = '-----END PRIVATE KEY-----';
+        $.ajax({
+            url:'/webchat/getPrivateKey',
+            type:'post',
+            async:false,
+            success:function (data) {
+                privateKey = prefix + data + '\n' + suffix;
+
+            }
+        })
+    };
+
+    // 拿到后台公钥
+    function getPublicKey() {
+        var prefix = '-----BEGIN PUBLIC KEY-----\n';
+        var suffix = '-----END PUBLIC KEY-----';
+        $.ajax({
+            url:'/webchat/getPublicKey',
+            type:'post',
+            async:false,
+            success:function (data) {
+                publicKey = prefix + data + '\n' + suffix;
+
+            }
+        })
+    };
+
+    // 消息验签
+    function verifySign(sign) {
+        if (sign != null) {
+            let signatureVf = new KJUR.crypto.Signature({alg:"SHA1withRSA", prvkeypem:publicKey});
+            signatureVf.updateString(webMsg);
+
+            let verify = signatureVf.verify(b64tohex(sign));
+            return verify;
+        } else {
+            return;
+        }
+    };
+    // RSA解密
+    function decryptRSA(encryptContent) {
+        console.log( 'RSA解密拿到的私钥 : ' + JSON.stringify(privateKey) );
+      const jsEncrypt = new JSEncrypt();
+      jsEncrypt.setPrivateKey(privateKey);
+      return jsEncrypt.decrypt(encryptContent);
+    };
+</script>
+</html>

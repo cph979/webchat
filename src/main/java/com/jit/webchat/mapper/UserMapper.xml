@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Config 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="com.jit.webchat.mapper.UserMapper">
+    <select id="queryUserByUsername" resultType="com.jit.webchat.bean.User">
+        select id, username, password from user where username = #{username}
+    </select>
+    <insert id="insertUser">
+        insert into user(username, password) values (#{username}, #{password})
+    </insert>
+    <select id="queryUserByUsernameAndPassword" resultType="com.jit.webchat.bean.User">
+        select id, username, password from user where username = #{username} and password = #{password}
+    </select>
+</mapper>
